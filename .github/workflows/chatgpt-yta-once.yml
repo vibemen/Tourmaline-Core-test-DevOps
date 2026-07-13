@@ -1,0 +1,53 @@
+name: ChatGPT YouTube Transcript API once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/chatgpt-yta-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Fetch official transcript snippets
+        shell: bash
+        run: |
+          set +e
+          : > yta_transcript.txt
+          : > yta_error.txt
+          python -m pip install -q youtube-transcript-api
+          python - <<'PY' > yta_error.txt 2>&1
+          from youtube_transcript_api import YouTubeTranscriptApi
+          video_id='-2l4lLszWL0'
+          api=YouTubeTranscriptApi()
+          try:
+              tl=api.list(video_id)
+              print('TRACKS:', [(t.language_code,t.is_generated,t.is_translatable) for t in tl])
+              tr=tl.find_transcript(['ru'])
+              fetched=tr.fetch()
+              print('COUNT', len(fetched))
+              with open('yta_transcript.txt','w',encoding='utf-8') as f:
+                  for s in fetched:
+                      h=int(s.start//3600); m=int((s.start%3600)//60); sec=int(s.start%60)
+                      text=s.text.replace('\n',' ').strip()
+                      f.write(f'[{h:02d}:{m:02d}:{sec:02d}] {text}\n')
+          except Exception as e:
+              print(type(e).__name__, repr(e))
+          PY
+          echo "bytes=$(wc -c < yta_transcript.txt)" >> yta_error.txt
+      - name: Save and remove workflow
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm -f .github/workflows/chatgpt-yta-once.yml
+          git add yta_transcript.txt yta_error.txt
+          git commit -m 'Temporary official transcript snippets'
+          git push origin main
