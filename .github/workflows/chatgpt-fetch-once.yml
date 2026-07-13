@@ -1,0 +1,57 @@
+name: ChatGPT fetch transcript once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/chatgpt-fetch-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Fetch transcript with fallbacks
+        shell: bash
+        run: |
+          set -uo pipefail
+          URL='https://www.youtube.com/watch?v=-2l4lLszWL0'
+          API='https://youtube-transcript.ai/transcript/-2l4lLszWL0.txt?lang=ru'
+          rm -f fetched_transcript.txt fetched_transcript.vtt transcript_error.txt
+          curl -fL --retry 3 --retry-delay 2 "$API" -o fetched_transcript.txt || true
+          if [ ! -s fetched_transcript.txt ] || [ "$(wc -c < fetched_transcript.txt)" -lt 500 ]; then
+            python -m pip install -q yt-dlp
+            yt-dlp --skip-download --write-auto-subs --write-subs --sub-langs 'ru.*,ru' --sub-format vtt -o 'captions.%(ext)s' "$URL" || true
+            VTT=$(find . -maxdepth 1 -name '*.vtt' | head -n 1)
+            [ -n "$VTT" ] && cp "$VTT" fetched_transcript.vtt || true
+          fi
+          if [ ! -s fetched_transcript.txt ] || [ "$(wc -c < fetched_transcript.txt)" -lt 500 ]; then
+            python -m pip install -q youtube-transcript-api
+            python - <<'PY'
+          from youtube_transcript_api import YouTubeTranscriptApi
+          video_id='-2l4lLszWL0'
+          try:
+              api=YouTubeTranscriptApi()
+              fetched=api.fetch(video_id, languages=['ru'])
+              with open('fetched_transcript.txt','w',encoding='utf-8') as f:
+                  for s in fetched:
+                      h=int(s.start//3600); m=int((s.start%3600)//60); sec=int(s.start%60)
+                      f.write(f'[{h:02d}:{m:02d}:{sec:02d}] {s.text}\n')
+          except Exception as e:
+              open('transcript_error.txt','w',encoding='utf-8').write(repr(e))
+          PY
+          fi
+      - name: Save result and remove this workflow
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm -f .github/workflows/chatgpt-fetch-once.yml
+          git add fetched_transcript.txt fetched_transcript.vtt transcript_error.txt 2>/dev/null || true
+          git commit -m 'Temporary transcript fetch result'
+          git push origin main
