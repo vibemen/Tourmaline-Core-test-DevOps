@@ -1,0 +1,66 @@
+name: ChatGPT temporary transcript fetch
+
+on:
+  push:
+    branches:
+      - chatgpt-temp-transcript-link
+    paths:
+      - .github/workflows/chatgpt-temp-transcript.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fetch-transcript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt-temp-transcript-link
+
+      - name: Fetch Russian transcript
+        shell: bash
+        run: |
+          set -uo pipefail
+          URL='https://www.youtube.com/watch?v=-2l4lLszWL0'
+          API='https://youtube-transcript.ai/transcript/-2l4lLszWL0.txt?lang=ru'
+          rm -f fetched_transcript.txt *.vtt
+          curl -fL --retry 3 --retry-delay 2 "$API" -o fetched_transcript.txt || true
+
+          if [ ! -s fetched_transcript.txt ] || [ "$(wc -c < fetched_transcript.txt)" -lt 500 ]; then
+            python -m pip install -q yt-dlp
+            yt-dlp --skip-download --write-auto-subs --write-subs --sub-langs 'ru.*,ru' --sub-format vtt -o 'captions.%(ext)s' "$URL" || true
+            VTT=$(find . -maxdepth 1 -name '*.vtt' | head -n 1)
+            if [ -n "$VTT" ]; then
+              cp "$VTT" fetched_transcript.vtt
+            fi
+          fi
+
+          if [ ! -s fetched_transcript.txt ] || [ "$(wc -c < fetched_transcript.txt)" -lt 500 ]; then
+            python -m pip install -q youtube-transcript-api
+            python - <<'PY'
+          from youtube_transcript_api import YouTubeTranscriptApi
+          video_id='-2l4lLszWL0'
+          try:
+              api=YouTubeTranscriptApi()
+              fetched=api.fetch(video_id, languages=['ru'])
+              with open('fetched_transcript.txt','w',encoding='utf-8') as f:
+                  for s in fetched:
+                      m=int(s.start//60); sec=int(s.start%60)
+                      f.write(f'[{m}:{sec:02d}] {s.text}\n')
+          except Exception as e:
+              with open('transcript_error.txt','w',encoding='utf-8') as f:
+                  f.write(repr(e))
+          PY
+          fi
+
+          ls -lah fetched_transcript* transcript_error.txt 2>/dev/null || true
+
+      - name: Commit result to temporary branch
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add fetched_transcript.txt fetched_transcript.vtt transcript_error.txt 2>/dev/null || true
+          git commit -m 'Fetch temporary YouTube transcript' || exit 0
+          git push origin HEAD:chatgpt-temp-transcript-link
